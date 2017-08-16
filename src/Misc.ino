@@ -50,7 +50,7 @@ void ResetFactory(void)
 /********************************************************************************************\
   Convert a char string to IP byte array
   \*********************************************************************************************/
-boolean str2ip(char *string, byte* IP)
+boolean str2ip(const char *string, byte* IP)
 {
   byte c;
   byte part = 0;
@@ -92,4 +92,17 @@ void ip2str(char *string, byte ip[4])
   sprintf_P(string, PSTR("%u.%u.%u.%u"), ip[0],ip[1],ip[2],ip[3]);
 }
 
+/********************************************************************************************\
+  Get free system mem
+\*********************************************************************************************/
+uint8_t *heapptr, *stackptr;
+
+unsigned long FreeMem(void)
+  {
+  stackptr = (uint8_t *)malloc(4);        // use stackptr temporarily
+  heapptr = stackptr;                     // save value of heap pointer
+  free(stackptr);                         // free up the memory again (sets stackptr to 0)
+  stackptr =  (uint8_t *)(SP);            // save value of stack pointer
+  return (stackptr-heapptr);
+}
 

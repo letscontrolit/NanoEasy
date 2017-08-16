@@ -2,7 +2,9 @@
 boolean Domoticz_sendData(int idx, int value)
 {
   boolean success = false;
-
+  #if FEATURE_SYSLOG
+    syslog("Send");
+  #endif
 #if FEATURE_HTTP_AUTH
   String authHeader = "";
   if ((Settings.ControllerUser[0] != 0) && (Settings.ControllerPassword[0] != 0))
@@ -21,7 +23,16 @@ boolean Domoticz_sendData(int idx, int value)
   // Use WiFiClient class to create TCP connections
   EthernetClient client;
   if (!client.connect(Settings.Controller_IP, Settings.ControllerPort)) {
-    return false;
+    #if FEATURE_SERIAL_DEBUG 
+      Serial.println("INIT!");
+    #endif
+    #if FEATURE_SYSLOG
+      syslog("Init");
+    #endif
+    uint8_t mac[6] = {0x00, 0x01, 0x02, 0x03, 0x04, Settings.Unit};
+    Enc28J60.init(mac);
+    if (!client.connect(Settings.Controller_IP, Settings.ControllerPort))
+      return false;
   }
 
   // We now create a URI for the request
@@ -40,20 +51,24 @@ boolean Domoticz_sendData(int idx, int value)
   unsigned long timer = millis() + 200;
   while (!client.available() && millis() < timer) {}
 
+#if FEATURE_SERIAL_DEBUG 
+  while (client.available())
+    Serial.write(client.read());
+#endif  
   // we can skip this check to save code...
   /*
 
     // Read all the lines of the reply from server and print them to Serial
     while (client.available()) {
       String line = client.readStringUntil('\n');
-      //Serial.println(line);
+      Serial.println(line);
       if (line.substring(0, 15) == F("HTTP/1.1 200 OK"))
       {
         Serial.println(F("S_OK"));
         success = true;
       }
     }
-  */
+  //*/
   client.stop();
   return success;
 }

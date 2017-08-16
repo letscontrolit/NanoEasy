@@ -4,7 +4,8 @@ String webdata = "";
 // Handle webserver requests
 //********************************************************************************
 void WebServerHandleClient() {
-  EthernetClient client = WebServer.available();
+  int freeMem = FreeMem();
+  client = WebServer.available();
   if (client) {
     // an http request ends with a blank line
     boolean currentLineIsBlank = true;
@@ -12,9 +13,16 @@ void WebServerHandleClient() {
     byte count = 0;
     boolean getrequest = true;
     webdata = "&";
-    while (client.connected()) {
+    unsigned long timer = millis() + 2000;
+    boolean timeOut = false;
+    while (client.connected()  && millis() < timer) {
+      if(millis() >= timer)
+        timeOut = true;
       if (client.available()) {
         char c = client.read();
+        #if FEATURE_SERIAL_DEBUG
+        Serial.write(c);
+        #endif
         if (getrequest)
           if (count < 40)
             request[count++] = c;
@@ -30,41 +38,101 @@ void WebServerHandleClient() {
           if (request[0] == 'P') // for POST, position is 6
             pos = 6;
 
-          if (request[pos] == '?')
+          // add get querystring to post data
+          int posQS = -1;
+          for (byte x=0; x<40;x++)
+            if (request[x] == '?'){
+               posQS = x;
+               break;
+            }
+          if (posQS >= 0)
           {
+            for (byte x=posQS; x<count; x++)
+              if (request[x] == ' ') request[x]=0; // strip remainder of "GET /?cmd=gpio,9,1 HTTP/1.1
             String arg = request;
-            arg = arg.substring(pos + 1);
+            arg = arg.substring(posQS + 1);
             webdata += arg;
           }
 
           webdata = URLDecode(webdata.c_str());
-
           // to save code, we use a very simple approach where webpage names are single char long
           char cmd = request[pos];
           switch (cmd)
           {
             #if FEATURE_WEB_CONFIG_NETWORK 
             case 'n':
-              addHeader(true, client);
-              handle_network(client, webdata);
+              addHeader(true,true);
+              handle_network(webdata);
               break;
             #endif
             case 'c':
             #if FEATURE_WEB_CONFIG_MAIN 
-              addHeader(true, client);
-              handle_config(client, webdata);
+              addHeader(true,true);
+              handle_config(webdata);
               break;
             #endif
             case '?':
             #if FEATURE_WEB_CONTROL 
-              addHeader(true, client);
-              handle_control(client, webdata);
+              addHeader(true,true);
+              handle_control(webdata);
               break;
             #endif
+            case 'd':
+            {
+              #if FEATURE_NODE_LIST
+              addHeader(false,false);
+              client.print(F("<meta name=\"viewport\" content=\"width=width=device-width, initial-scale=1\"><STYLE>* {font-family:sans-serif; font-size:16pt;}.button {margin:4px; padding:4px 14px; background-color:#07D; color:#FFF; text-decoration:none; border-radius:4px}</STYLE>"));
+              client.print(Settings.Unit);
+              client.print(F(" - "));
+              client.print(Settings.Name);
+              // create <> navigation buttons
+              byte prev=Settings.Unit;
+              byte next=Settings.Unit;
+              for (byte x = Settings.Unit-1; x > 0; x--)
+                if (Nodes[x].octet != 0) {prev = x; break;}
+              for (byte x = Settings.Unit+1; x < UNIT_MAX; x++)
+                if (Nodes[x].octet != 0) {next = x; break;}
+             char url[40];
+             IPAddress ip = Ethernet.localIP();
+             sprintf_P(url, PSTR("http://%u.%u.%u.%u/dashboard.esp"), ip[0], ip[1], ip[2], Nodes[prev].octet);
+             client.print(F("<a class='button link' href="));
+             client.print(url);
+             client.print(F(">&lt;</a>"));
+             sprintf_P(url, PSTR("http://%u.%u.%u.%u/dashboard.esp"), ip[0], ip[1], ip[2], Nodes[next].octet);
+             client.print(F("<a class='button link' href="));
+             client.print(url);
+             client.print(F(">&gt;</a>"));
+
+             client.print(F("<BR><BR><a class='button link' href=/d?cmd=gpio,"));
+             client.print(Settings.Pin);
+             client.print(F(",1>On</a>"));
+             client.print(F("<a class='button link' href=/d?cmd=gpio,"));
+             client.print(Settings.Pin);
+             client.print(F(",0>Off</a>"));
+
+              handle_control(webdata);
+
+             /*
+             for (byte x=0; x < UNIT_MAX;x++)
+                #if FEATURE_NODE_LIST_FULLIP
+                  if (Nodes[x].ip[0] != 0)
+                #else
+                  if (Nodes[x].octet != 0)
+                #endif
+                {
+                  client.print(F("<BR>"));
+                  client.print(x);
+                }
+              */
+            #endif
+            break;
+            }
             default:
-              addHeader(true, client);
+              addHeader(true,true);
               client.print(F("Uptime:"));
               client.print(wdcounter / 2);
+              client.print(F("<BR>FreeMem:"));
+              client.print(freeMem);
           }
           break;
         }
@@ -73,6 +141,7 @@ void WebServerHandleClient() {
           // you're starting a new line
           currentLineIsBlank = true;
           getrequest = false;
+          request[count] = 0;
         } else if (c != '\r') {
           // you've gotten a character on the current line
           currentLineIsBlank = false;
@@ -80,8 +149,13 @@ void WebServerHandleClient() {
       }
     }
     // give the web browser time to receive the data
-    delay(1);
+    delay(100);
     client.stop();
+    if(timeOut)
+    {
+      uint8_t mac[6] = {0x00, 0x01, 0x02, 0x03, 0x04, Settings.Unit};
+      Enc28J60.init(mac);
+    }
     webdata = "";
   }
 }
@@ -113,17 +187,20 @@ String WebServerarg(String arg)
 //********************************************************************************
 // Add top menu
 //********************************************************************************
-void addHeader(boolean showMenu, EthernetClient &client)
+void addHeader(boolean showTitle, boolean showMenu)
 {
   client.println(F("HTTP/1.1 200 OK"));
   client.println(F("Content-Type: text/html"));
   client.println(F("Connection: close"));  // the connection will be closed after completion of the response
   client.println();
 
-  client.print(F("<h1>Nano Easy: "));
-  client.print(Settings.Name);
-  client.print(F("</h1>"));
-
+  if (showTitle)
+  {
+    client.print(F("<h1>Nano Easy: "));
+    client.print(Settings.Name);
+    client.print(F("</h1>"));
+  }
+  
   if (showMenu)
   {
     client.print(F("<a href=\"n\">Network</a>"));
@@ -136,7 +213,7 @@ void addHeader(boolean showMenu, EthernetClient &client)
 //********************************************************************************
 // Add footer
 //********************************************************************************
-void addFooter(EthernetClient &client)
+void addFooter()
 {
   client.print(F("<TR><TD><TD><input type='submit' value='Submit'>"));
   client.print(F("</table></form>"));
@@ -146,93 +223,52 @@ void addFooter(EthernetClient &client)
 //********************************************************************************
 // Web Interface main config page
 //********************************************************************************
-void handle_config(EthernetClient &client, String &post) {
+void handle_config(String &post) {
 
   update_config();
   webdata = "";
-
-  client.print(F("<TR><TD>Name:<TD><input type='text' name='n' value='"));
+  addFormTextBox(F("Name"), '1', Settings.Name);
   Settings.Name[25] = 0;
-  client.print(Settings.Name);
-
-  client.print(F("'><TR><TD>Unit:<TD><input type='text' name='u' value='"));
-  client.print(Settings.Unit);
-
-  char str[20];
-
-  client.print(F("'><TR><TD>Controller<TR><TD>IP:<TD><input type='text' name='cip' value='"));
-  ip2str(str, Settings.Controller_IP);
-  client.print(str);
-
-  client.print(F("'><TR><TD>Port:<TD><input type='text' name='cp' value='"));
-  client.print(Settings.ControllerPort);
-  client.print(F("'>"));
-
+  addFormNumericBox(F("Unit"), '2', Settings.Unit);
+  addFormIPBox(F("Controller IP"), '3', Settings.Controller_IP);
+  addFormNumericBox(F("Port"), '4', Settings.ControllerPort);
+  
 #if FEATURE_HTTP_AUTH
-  client.print(F("'><TR><TD>User:<TD><input type='text' name='cu' value='"));
-  client.print(Settings.ControllerUser);
-
-  client.print(F("'><TR><TD>Password:<TD><input type='text' name='cpw' value='"));
-  client.print(Settings.ControllerPassword);
-  client.print(F("'>"));
+  addFormTextBox(F("User"), 'a', Settings.ControllerUser);
+  addFormTextBox(F("Password"), 'b', Settings.ControllerPassword);
 #endif
 
-  client.print(F("<TR><TD>Sensor<TR><TD>Delay:<TD><input type='text' name='d' value='"));
-  client.print(Settings.Delay);
-  client.print(F("'>"));
-
-  client.print(F("<TR><TD>IDX/Var:<TD><input type='text' name='idx' value='"));
-  client.print(Settings.IDX);
-  client.print(F("'>"));
-
-  client.print(F("<TR><TD>Pin:<TD><input type='text' name='pin' value='"));
-  client.print(Settings.Pin);
-  client.print(F("'>"));
-
-  client.print(F("<TR><TD>Mode:<TD><input type='text' name='m' value='"));
-  client.print(Settings.Mode);
-  client.print(F("'>"));
-
-  addFooter(client);
+  addFormNumericBox(F("Delay"), '5', Settings.Delay);
+  addFormNumericBox(F("IDX/Var"), '6', Settings.IDX);
+  addFormNumericBox(F("Pin"), '7', Settings.Pin);
+  addFormNumericBox(F("Mode"), '8', Settings.Mode);
+  addFormIPBox(F("Syslog IP"), '9', Settings.Syslog_IP);
+  addFooter();
 }
 
 
 void update_config()
 {
-  char tmpString[64];
-
-  String arg = "";
-  arg = WebServerarg(F("n"));
+  String arg = WebServerarg("1");
 
   if (arg[0] != 0)
   {
     strncpy(Settings.Name, arg.c_str(), sizeof(Settings.Name));
 
-    arg = WebServerarg(F("cip"));
-    arg.toCharArray(tmpString, 26);
-    str2ip(tmpString, Settings.Controller_IP);
-
-    arg = WebServerarg(F("cp"));
-    Settings.ControllerPort = arg.toInt();
+    Settings.Unit = WebServerarg("2").toInt();
+    str2ip(WebServerarg("3").c_str(), Settings.Controller_IP);
+    Settings.ControllerPort = WebServerarg("4").toInt();
 
 #if FEATURE_HTTP_AUTH
-    arg = WebServerarg(F("cu"));
-    strncpy(Settings.ControllerUser, arg.c_str(), sizeof(Settings.ControllerUser));
-    arg = WebServerarg(F("cpw"));
-    strncpy(Settings.ControllerPassword, arg.c_str(), sizeof(Settings.ControllerPassword));
+    strncpy(Settings.ControllerUser, WebServerarg("a").c_str(), sizeof(Settings.ControllerUser));
+    strncpy(Settings.ControllerPassword, WebServerarg("b").c_str(), sizeof(Settings.ControllerPassword));
 #endif
 
-    arg = WebServerarg(F("d"));
-    Settings.Delay = arg.toInt();
-    arg = WebServerarg(F("u"));
-    Settings.Unit = arg.toInt();
-    arg = WebServerarg(F("idx"));
-    Settings.IDX = arg.toInt();
-    arg = WebServerarg(F("pin"));
-    Settings.Pin = arg.toInt();
-    arg = WebServerarg(F("m"));
-    Settings.Mode = arg.toInt();
-
+    Settings.Delay = WebServerarg("5").toInt();
+    Settings.IDX = WebServerarg("6").toInt();
+    Settings.Pin = WebServerarg("7").toInt();
+    Settings.Mode = WebServerarg("8").toInt();
+    str2ip(WebServerarg("9").c_str(), Settings.Syslog_IP);
     SaveSettings();
   }
 }
@@ -241,55 +277,29 @@ void update_config()
 //********************************************************************************
 // Web Interface network config page
 //********************************************************************************
-void handle_network(EthernetClient &client, String &post) {
+void handle_network(String &post) {
 
   update_network();
   webdata = "";
-
-  char str[20];
-
-  client.print(F("<TR><TD>IP:<TD><input type='text' name='ip' value='"));
-  ip2str(str, Settings.IP);
-  client.print(str);
-
-  client.print(F("'><TR><TD>GW:<TD><input type='text' name='gw' value='"));
-  ip2str(str, Settings.Gateway);
-  client.print(str);
-
-  client.print(F("'><TR><TD>Subnet:<TD><input type='text' name='sn' value='"));
-  ip2str(str, Settings.Subnet);
-  client.print(str);
-
-  client.print(F("'><TR><TD>DNS:<TD><input type='text' name='dns' value='"));
-  ip2str(str, Settings.DNS);
-  client.print(str);
-  client.print(F("'>"));
-
-  addFooter(client);
+  addFormIPBox(F("IP"), '1', Settings.IP);
+  addFormIPBox(F("GW"), '2', Settings.Gateway);
+  addFormIPBox(F("Subnet"), '3', Settings.Subnet);
+  addFormIPBox(F("DNS"), '4', Settings.DNS);
+  addFooter();
 }
 
 
 void update_network()
 {
-  char tmpString[64];
-
   String arg = "";
-  arg = WebServerarg(F("ip"));
+  arg = WebServerarg("1");
 
   if (arg[0] != 0)
   {
-    arg = WebServerarg(F("ip"));
-    arg.toCharArray(tmpString, 26);
-    str2ip(tmpString, Settings.IP);
-    arg = WebServerarg(F("gw"));
-    arg.toCharArray(tmpString, 26);
-    str2ip(tmpString, Settings.Gateway);
-    arg = WebServerarg(F("sn"));
-    arg.toCharArray(tmpString, 26);
-    str2ip(tmpString, Settings.Subnet);
-    arg = WebServerarg(F("dns"));
-    arg.toCharArray(tmpString, 26);
-    str2ip(tmpString, Settings.DNS);
+    str2ip(WebServerarg("1").c_str(), Settings.IP);
+    str2ip(WebServerarg("2").c_str(), Settings.Gateway);
+    str2ip(WebServerarg("3").c_str(), Settings.Subnet);
+    str2ip(WebServerarg("4").c_str(), Settings.DNS);
     SaveSettings();
   }
 }
@@ -298,9 +308,14 @@ void update_network()
 //********************************************************************************
 // Web Interface control page
 //********************************************************************************
-void handle_control(EthernetClient &client, String &post) {
+void handle_control(String &post) {
 
   String webrequest = WebServerarg(F("cmd"));
+  if (webrequest == F("reboot"))
+  {
+    client.stop();
+    Reboot();
+  }
   // gpio,1,1
   char cmd[10];
   webrequest.toCharArray(cmd, 10);
@@ -428,4 +443,57 @@ int b64_encode(const char* aInput, int aInputLen, char* aOutput, int aOutputLen)
   }
 }
 #endif
+
+void addFormTextBox(const String& label, char id, const String& value)
+{
+  addRowLabel(label);
+  addTextBox(id, value);
+}
+
+void addTextBox(char id, const String&  value)
+{
+  client.print(F("<input type='text' name='"));
+  client.print(id);
+  client.print(F("' value='"));
+  client.print(value);
+  client.print(F("'>"));
+}
+
+void addFormNumericBox(const String& label, char id, int value)
+{
+  addRowLabel(label);
+  addNumericBox(id, value);
+}
+
+void addNumericBox(char id, int value)
+{
+  client.print(F("<input type='text' name='"));
+  client.print(id);
+  client.print(F("' value='"));
+  client.print(value);
+  client.print(F("'>"));
+}
+
+void addFormIPBox(const String& label, char id, const byte ip[4])
+{
+  char strip[20];
+  if (ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0)
+    strip[0] = 0;
+  else
+    sprintf_P(strip, PSTR("%u.%u.%u.%u"), ip[0], ip[1], ip[2], ip[3]);
+
+  addRowLabel(label);
+  client.print(F("<input type='text' name='"));
+  client.print(id);
+  client.print(F("' value='"));
+  client.print(strip);
+  client.print(F("'>"));
+}
+
+void addRowLabel(const String& label)
+{
+  client.print(F("<TR><TD>"));
+  client.print(label);
+  client.print(F(":<TD>"));
+}
 

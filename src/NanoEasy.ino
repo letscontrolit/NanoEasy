@@ -53,22 +53,26 @@
 #define FEATURE_CONTROLLER_DOMOTICZ true
 #define FEATURE_CONTROLLER_MQTT     false // does not work with webconfig, sketch to big...
 #define FEATURE_UDP_SEND            true
-#define FEATURE_UDP_RECV            false
+#define FEATURE_UDP_RECV            true
 #define FEATURE_HTTP_AUTH           false
 #define FEATURE_WEB_CONFIG_NETWORK  true
 #define FEATURE_WEB_CONFIG_MAIN     true
 #define FEATURE_WEB_CONTROL         true
-#define FEATURE_SERIAL_DEBUG        true
-
+#define FEATURE_NODE_LIST           true
+#define FEATURE_NODE_LIST_FULLIP    false // false is suitable for common C-class home networks and saves 100B RAM!
+#define FEATURE_SERIAL_DEBUG        false
+#define FEATURE_SYSLOG              true
 
 // do not change anything below this line !
 
 #define NANO_PROJECT_PID       2016120701L
 #define VERSION                          1
-#define BUILD                          148
+#define BUILD                          149
 
 #define NODE_TYPE_ID_NANO_EASY_STD         81
 #define NODE_TYPE_ID                       NODE_TYPE_ID_NANO_EASY_STD
+
+#define UNIT_MAX                           32 // Only relevant for UDP unicast message 'sweeps' and the nodelist.
 
 #include <EEPROM.h>
 #include <UIPEthernet.h>
@@ -82,6 +86,8 @@ PubSubClient MQTTclient(mqtt);
 #endif
 
 EthernetServer WebServer = EthernetServer(80);
+EthernetClient client;
+
 #if FEATURE_UDP_SEND or FEATURE_UDP_RECV
 EthernetUDP portUDP;
 #endif
@@ -105,6 +111,7 @@ struct SettingsStruct
   int16_t       IDX;
   byte          Pin;
   byte          Mode;
+  byte          Syslog_IP[4];
 #if FEATURE_HTTP_AUTH
   char          ControllerUser[26];
   char          ControllerPassword[64];
@@ -114,6 +121,19 @@ struct SettingsStruct
   boolean       MQTTRetainFlag;
 #endif
 } Settings;
+
+#if FEATURE_NODE_LIST
+struct NodeStruct
+{
+  #if FEATURE_NODE_LIST_FULLIP
+  byte ip[4];
+  #else
+  byte octet;
+  #endif
+  byte age;
+  //uint16_t build;
+} Nodes[UNIT_MAX];
+#endif
 
 unsigned long timer;
 unsigned long timerwd;
@@ -154,7 +174,7 @@ void setup()
     myIP = DEFAULT_IP;
 
   Ethernet.begin(mac, myIP);
-  // todo: begin(const uint8_t* mac, IPAddress ip, IPAddress dns, IPAddress gateway, IPAddress subnet);
+  //Ethernet.begin(mac, myIP, Settings.DNS, Settings.Gateway, Settings.Subnet);
 
   WebServer.begin();
 #if FEATURE_UDP_RECV
@@ -167,6 +187,9 @@ void setup()
 
   timer = millis() + Settings.Delay * 1000;
   timerwd = millis() + 30000;
+  #if FEATURE_SYSLOG
+  syslog("Boot");
+  #endif
 }
 
 void loop()
@@ -175,9 +198,36 @@ void loop()
   {
     timerwd = millis() + 30000;
     wdcounter++;
+#if FEATURE_SERIAL_DEBUG
+      Serial.print(wdcounter / 2);
+      Serial.print("-");
+      Serial.println(FreeMem());
+#endif    
 #if FEATURE_UDP_SEND
     UDP();
 #endif
+
+    #if FEATURE_NODE_LIST
+    // refresh node list
+    for (byte counter = 0; counter < UNIT_MAX; counter++)
+    {
+      #if FEATURE_NODE_LIST_FULLIP
+      if (Nodes[counter].ip[0] != 0)
+      #else
+      if (Nodes[counter].octet != 0)
+      #endif
+      {
+        Nodes[counter].age++;  // increment age counter
+        if (Nodes[counter].age > 10) // if entry to old, clear this node ip from the list.
+          for (byte x = 0; x < 4; x++)
+            #if FEATURE_NODE_LIST_FULLIP
+              Nodes[counter].ip[x] = 0;
+            #else
+              Nodes[counter].octet = 0;
+            #endif
+      }
+    }
+    #endif // NODE LIST
   }
 
   if (Settings.Delay != 0)
