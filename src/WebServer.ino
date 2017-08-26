@@ -12,7 +12,7 @@ void WebServerHandleClient() {
     char request[40];
     byte count = 0;
     boolean getrequest = true;
-    webdata = "&";
+    webdata = "";
     unsigned long timer = millis() + 2000;
     boolean timeOut = false;
     while (client.connected()  && millis() < timer) {
@@ -29,6 +29,8 @@ void WebServerHandleClient() {
 
         if (c == '\n' && currentLineIsBlank) {
 
+          if(client.available())
+            webdata = "&";
           while (client.available()) { // post data...
             char c = client.read();
             webdata += c;
@@ -51,7 +53,7 @@ void WebServerHandleClient() {
               if (request[x] == ' ') request[x]=0; // strip remainder of "GET /?cmd=gpio,9,1 HTTP/1.1
             String arg = request;
             arg = arg.substring(posQS + 1);
-            webdata += arg;
+            webdata += "&" + arg;
           }
 
           webdata = URLDecode(webdata.c_str());
@@ -99,40 +101,36 @@ void WebServerHandleClient() {
              client.print(url);
              client.print(F(">&lt;</a>"));
              sprintf_P(url, PSTR("http://%u.%u.%u.%u/dashboard.esp"), ip[0], ip[1], ip[2], Nodes[next].octet);
-             client.print(F("<a class='button link' href="));
+             client.print(F("<a class='button' href="));
              client.print(url);
              client.print(F(">&gt;</a>"));
 
-             client.print(F("<BR><BR><a class='button link' href=/d?cmd=gpio,"));
+             client.print(F("<BR><BR><a class='button' href=/d?cmd=gpio,"));
              client.print(Settings.Pin);
              client.print(F(",1>On</a>"));
-             client.print(F("<a class='button link' href=/d?cmd=gpio,"));
+             client.print(F("<a class='button' href=/d?cmd=gpio,"));
              client.print(Settings.Pin);
              client.print(F(",0>Off</a>"));
 
               handle_control(webdata);
 
-             /*
-             for (byte x=0; x < UNIT_MAX;x++)
-                #if FEATURE_NODE_LIST_FULLIP
-                  if (Nodes[x].ip[0] != 0)
-                #else
-                  if (Nodes[x].octet != 0)
-                #endif
-                {
-                  client.print(F("<BR>"));
-                  client.print(x);
-                }
-              */
             #endif
             break;
             }
             default:
               addHeader(true,true);
-              client.print(F("Uptime:"));
-              client.print(wdcounter / 2);
-              client.print(F("<BR>FreeMem:"));
-              client.print(freeMem);
+              #ifdef __ENC28J60__
+                client.print(F("Build:"));
+                client.print(BUILD);
+                client.print(F("<BR>Uptime:"));
+                client.print(wdcounter / 2);
+                client.print(F("<BR>FreeMem:"));
+                client.print(freeMem);
+              #else
+                #if FEATURE_WEB_ROOT
+                  handle_root(webdata);
+                #endif
+              #endif
           }
           break;
         }
@@ -153,8 +151,9 @@ void WebServerHandleClient() {
     client.stop();
     if(timeOut)
     {
-      uint8_t mac[6] = {0x00, 0x01, 0x02, 0x03, 0x04, Settings.Unit};
-      Enc28J60.init(mac);
+      #ifdef __ENC28J60__
+        Enc28J60.init(mac);
+      #endif
     }
     webdata = "";
   }
@@ -194,6 +193,16 @@ void addHeader(boolean showTitle, boolean showMenu)
   client.println(F("Connection: close"));  // the connection will be closed after completion of the response
   client.println();
 
+  #ifndef __ENC28J60__
+    client.println(F("<style>"));
+    client.println(F("* {font-family:sans-serif; font-size:12pt;}"));
+    client.println(F(".button {margin:4px; padding:4px 16px; background-color:#07D; color:#FFF; text-decoration:none; border-radius:4px}"));
+    client.println(F("th {padding:10px; background-color:black; color:#ffffff;}"));
+    client.println(F("td {padding:7px;}"));
+    client.println(F("table {color:black;}"));
+    client.println(F("</style>"));
+  #endif
+  
   if (showTitle)
   {
     client.print(F("<h1>Nano Easy: "));
@@ -203,8 +212,15 @@ void addHeader(boolean showTitle, boolean showMenu)
   
   if (showMenu)
   {
-    client.print(F("<a href=\"n\">Network</a>"));
+  #ifdef __ENC28J60__
+    client.print(F("<a href=\".\">Main</a>"));
+    client.print(F(" <a href=\"n\">Network</a>"));
     client.print(F(" <a href=\"c\">Config</a>"));
+  #else
+    client.print(F("<a class=\"button\" href=\".\">Main</a>"));
+    client.print(F("<a class=\"button\" href=\"n\">Network</a>"));
+    client.print(F("<a class=\"button\" href=\"c\">Config</a><BR><BR>"));
+  #endif
   }
   client.print(F("<form method='post'><table>"));
 }
@@ -213,12 +229,101 @@ void addHeader(boolean showTitle, boolean showMenu)
 //********************************************************************************
 // Add footer
 //********************************************************************************
-void addFooter()
+void addFooter(boolean button = false)
 {
-  client.print(F("<TR><TD><TD><input type='submit' value='Submit'>"));
+  if (button)
+    client.print(F("<TR><TD><TD><input type='submit' value='Submit'>"));
   client.print(F("</table></form>"));
 }
 
+
+//********************************************************************************
+// Web Interface root page
+//********************************************************************************
+#if FEATURE_WEB_ROOT
+void handle_root(String &post) {
+
+  //if (!isLoggedIn()) return;
+
+    IPAddress ip = Ethernet.localIP();
+    IPAddress gw = Ethernet.gatewayIP();
+
+    client.print(F("<table><TH>System Info<TH>Value<TH><TH>System Info<TH>Value"));
+
+    client.print(F("<TR><TD>Unit:<TD>"));
+    client.print(Settings.Unit);
+
+    client.print(F("<TD><TD>Build:<TD>"));
+    client.print(BUILD);
+
+    client.print(F("<TR><TD>No System Time:<TD>"));
+    client.print(F("<TD><TD>Uptime:<TD>"));
+    char strUpTime[40];
+    int minutes = wdcounter / 2;
+    int days = minutes / 1440;
+    minutes = minutes % 1440;
+    int hrs = minutes / 60;
+    minutes = minutes % 60;
+    sprintf_P(strUpTime, PSTR("%d days %d hours %d minutes"), days, hrs, minutes);
+    client.print(strUpTime);
+
+    client.print(F("<TR><TD>Load:<TD>"));
+    if (wdcounter > 0)
+    {
+      //reply += 100 - (100 * loopCounterLast / loopCounterMax);
+      client.print(F("% (LC="));
+      //reply += int(loopCounterLast / 30);
+      client.print(F(")"));
+    }
+
+    client.print(F("<TD><TD>Free Mem:<TD>"));
+    client.print(FreeMem());
+
+    char str[20];
+    sprintf_P(str, PSTR("%u.%u.%u.%u"), ip[0], ip[1], ip[2], ip[3]);
+    client.print(F("<TR><TD>IP:<TD>"));
+    client.print(str);
+
+    sprintf_P(str, PSTR("%u.%u.%u.%u"), gw[0], gw[1], gw[2], gw[3]);
+    client.print(F("<TD><TD>GW:<TD>"));
+    client.print(str);
+
+    #if FEATURE_NODE_LIST
+    #if FEATURE_NODELIST_NAMES
+        client.print(F("<TR><TH>Node List:<TH>Build<TH>Name<TH>IP<TH>Age<TH><TR><TD><TD><TD>"));
+    #else
+        client.print(F("<TR><TH>Node List:<TH>Build<TH>IP<TH>Age<TH><TR><TD><TD><TD>"));
+    #endif
+    for (byte x = 0; x < UNIT_MAX; x++)
+    {
+      if (Nodes[x].octet != 0)
+      {
+        char url[80];
+        IPAddress ip = Ethernet.localIP();
+        sprintf_P(url, PSTR("<a class='button' href='http://%u.%u.%u.%u'>%u.%u.%u.%u</a>"), ip[0], ip[1], ip[2], Nodes[x].octet, ip[0], ip[1], ip[2], Nodes[x].octet);
+        client.print(F("<TR><TD>Unit "));
+        client.print(x);
+        #if FEATURE_NODELIST_NAMES
+        client.print(F("<TD>"));
+        if (x != Settings.Unit)
+          client.print(Nodes[x].nodeName);
+        else
+          client.print(Settings.Name);
+        #endif
+        client.print(F("<TD>"));
+        //if (Nodes[x].build)
+        //  reply += Nodes[x].build;
+        client.print(F("<TD>"));
+        client.print(url);
+        client.print(F("<TD>"));
+        client.print(Nodes[x].age);
+      }
+    }
+    #endif
+    client.print(F("</table>"));
+    addFooter();
+}
+#endif
 
 //********************************************************************************
 // Web Interface main config page
@@ -243,7 +348,8 @@ void handle_config(String &post) {
   addFormNumericBox(F("Pin"), '7', Settings.Pin);
   addFormNumericBox(F("Mode"), '8', Settings.Mode);
   addFormIPBox(F("Syslog IP"), '9', Settings.Syslog_IP);
-  addFooter();
+  addFormNumericBox(F("UDP Port"), 'c', Settings.UDPPort);
+  addFooter(true);
 }
 
 
@@ -269,6 +375,7 @@ void update_config()
     Settings.Pin = WebServerarg("7").toInt();
     Settings.Mode = WebServerarg("8").toInt();
     str2ip(WebServerarg("9").c_str(), Settings.Syslog_IP);
+    Settings.UDPPort = WebServerarg("c").toInt();
     SaveSettings();
   }
 }
@@ -285,7 +392,7 @@ void handle_network(String &post) {
   addFormIPBox(F("GW"), '2', Settings.Gateway);
   addFormIPBox(F("Subnet"), '3', Settings.Subnet);
   addFormIPBox(F("DNS"), '4', Settings.DNS);
-  addFooter();
+  addFooter(true);
 }
 
 
@@ -459,13 +566,13 @@ void addTextBox(char id, const String&  value)
   client.print(F("'>"));
 }
 
-void addFormNumericBox(const String& label, char id, int value)
+void addFormNumericBox(const String& label, char id, long value)
 {
   addRowLabel(label);
   addNumericBox(id, value);
 }
 
-void addNumericBox(char id, int value)
+void addNumericBox(char id, long value)
 {
   client.print(F("<input type='text' name='"));
   client.print(id);

@@ -1,3 +1,6 @@
+// R150 18-08-2017
+// Code compatible with W5100 ethernetshield so it can also run on Uno with classic ethernetshield
+
 // R149 15-08-2017
 // Code optimization
 // Added Nodelist, Syslog, Mini Dashboard

@@ -41,6 +41,7 @@ void ResetFactory(void)
   Settings.Delay               = DEFAULT_DELAY;
   strcpy_P(Settings.Name, PSTR(DEFAULT_NAME));
   Settings.Build               = BUILD;
+  Settings.UDPPort             = UDP_PORT;
   SaveSettings();
   delay(1000);
   Reboot();
@@ -104,5 +105,57 @@ unsigned long FreeMem(void)
   free(stackptr);                         // free up the memory again (sets stackptr to 0)
   stackptr =  (uint8_t *)(SP);            // save value of stack pointer
   return (stackptr-heapptr);
+}
+
+/********************************************************************************************\
+  Find positional parameter in a char string
+  \*********************************************************************************************/
+boolean GetArgv(const char *string, char *argv, int argc)
+{
+  int string_pos = 0, argv_pos = 0, argc_pos = 0;
+  char c, d;
+
+  while (string_pos < strlen(string))
+  {
+    c = string[string_pos];
+    d = string[string_pos + 1];
+
+    if       (c == ' ' && d == ' ') {}
+    else if  (c == ' ' && d == ',') {}
+    else if  (c == ',' && d == ' ') {}
+    else if  (c == ' ' && d >= 33 && d <= 126) {}
+    else if  (c == ',' && d >= 33 && d <= 126) {}
+    else
+    {
+      argv[argv_pos++] = c;
+      argv[argv_pos] = 0;
+
+      if (d == ' ' || d == ',' || d == 0)
+      {
+        argv[argv_pos] = 0;
+        argc_pos++;
+
+        if (argc_pos == argc)
+        {
+          return true;
+        }
+
+        argv[0] = 0;
+        argv_pos = 0;
+        string_pos++;
+      }
+    }
+    string_pos++;
+  }
+  return false;
+}
+
+/********************************************************************************************\
+  Convert a char string to integer
+  \*********************************************************************************************/
+unsigned long str2int(char *string)
+{
+  unsigned long temp = atof(string);
+  return temp;
 }
 

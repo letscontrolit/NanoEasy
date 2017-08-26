@@ -30,7 +30,9 @@ boolean Domoticz_sendData(int idx, int value)
       syslog("Init");
     #endif
     uint8_t mac[6] = {0x00, 0x01, 0x02, 0x03, 0x04, Settings.Unit};
-    Enc28J60.init(mac);
+    #ifdef __ENC28J60__    
+      Enc28J60.init(mac);
+    #endif
     if (!client.connect(Settings.Controller_IP, Settings.ControllerPort))
       return false;
   }

@@ -34,7 +34,7 @@ void UDP()
   data[40] = NODE_TYPE_ID;
 
   IPAddress broadcastIP(255, 255, 255, 255);
-  portUDP.beginPacket(broadcastIP, UDP_PORT);
+  portUDP.beginPacket(broadcastIP, Settings.UDPPort);
   portUDP.write(data, 80);
   portUDP.endPacket();
 
@@ -103,10 +103,14 @@ void UDPCheck()
       }
       #endif  
     }
-    portUDP.stop();
-    portUDP.begin(UDP_PORT);
+    #ifdef __ENC28J60__    
+      portUDP.stop();
+      portUDP.begin(Settings.UDPPort);
+    #endif
   }
-  //portUDP.flush();
+  #ifndef __ENC28J60__    
+    portUDP.flush();
+  #endif
 }
 #endif
 
